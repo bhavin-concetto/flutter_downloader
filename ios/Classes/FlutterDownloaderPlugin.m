@@ -159,7 +159,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
     return _session;
 }
 
-- (NSURLSessionDownloadTask*)downloadTaskWithURL: (NSURL*) url fileName: (NSString*) fileName andSavedDir: (NSString*) savedDir andHeaders: (NSString*) headers
+- (NSURLSessionDownloadTask*)downloadTaskWithURL: (NSURL*) url fileName: (NSString*) fileName andSavedDir: (NSString*) savedDir andHeaders: (NSString*) headers pTaskId: (NSString*) pTaskId
 {
     NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:url];
     if (headers != nil && [headers length] > 0) {
@@ -177,7 +177,11 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
     }
     NSURLSessionDownloadTask *task = [[self currentSession] downloadTaskWithRequest:request];
     // store task id in taskDescription
-    task.taskDescription = [self createTaskId];
+    if(pTaskId != NULL){
+        task.taskDescription = pTaskId;
+    }else{
+        task.taskDescription = [self createTaskId];
+    }
     [task resume];
 
     return task;
@@ -216,10 +220,10 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
             NSString *taskIdValue = [weakSelf identifierForTask:download];
             if ([taskId isEqualToString:taskIdValue] && (state == NSURLSessionTaskStateRunning)) {
                 NSDictionary *task = [weakSelf loadTaskWithId:taskIdValue];
-              
+
                 NSNumber *progressNumOfTask = task[@"progress"];
                 int progress = progressNumOfTask.intValue;
-                
+
                 [download cancelByProducingResumeData:^(NSData * _Nullable resumeData) {
                     // Save partial downloaded data to a file
                     NSFileManager *fileManager = [NSFileManager defaultManager];
@@ -289,11 +293,17 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
 
 - (void)sendUpdateProgressForTaskId: (NSString*)taskId inStatus: (NSNumber*) status andProgress: (NSNumber*) progress
 {
+if(status == NULL){
+  if(debug){
+  NSLog(@"@301 status is null %@1 : %@2 : %@3", taskId , status, progress);
+  }
+  }else{
     NSArray *args = @[@(_callbackHandle), taskId, status, progress];
     if (initialized && _callbackHandle != 0) {
         [_callbackChannel invokeMethod:@"" arguments:args];
     } else {
         [_eventQueue addObject:args];
+    }
     }
 }
 
@@ -378,7 +388,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
     if (debug) {
         NSLog(@"Absolute savedDir path: %@", absolutePath);
     }
-    
+
     if (absolutePath) {
         NSString* documentDirPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
         if ([absolutePath isEqualToString:documentDirPath]) {
@@ -391,7 +401,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
             return shortenSavedDirPath != nil ? shortenSavedDirPath : @"";
         }
     }
-   
+
     return absolutePath;
 }
 
@@ -633,8 +643,9 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
     NSString *headers = call.arguments[KEY_HEADERS];
     NSNumber *showNotification = call.arguments[KEY_SHOW_NOTIFICATION];
     NSNumber *openFileFromNotification = call.arguments[KEY_OPEN_FILE_FROM_NOTIFICATION];
+    NSString *pTaskId = call.arguments[KEY_TASK_ID];
 
-    NSURLSessionDownloadTask *task = [self downloadTaskWithURL:[NSURL URLWithString:urlString] fileName:fileName andSavedDir:savedDir andHeaders:headers];
+    NSURLSessionDownloadTask *task = [self downloadTaskWithURL:[NSURL URLWithString:urlString] fileName:fileName andSavedDir:savedDir andHeaders:headers pTaskId: pTaskId];
 
     NSString *taskId = [self identifierForTask:task];
 
@@ -651,7 +662,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
                          forKey:taskId];
 
     __typeof__(self) __weak weakSelf = self;
-    
+
     [self executeInDatabaseQueueForTask:^{
         [weakSelf addNewTask:taskId url:urlString status:STATUS_ENQUEUED progress:0 filename:fileName savedDir:shortSavedDir headers:headers resumable:NO showNotification: [showNotification boolValue] openFileFromNotification: [openFileFromNotification boolValue]];
     }];
@@ -755,7 +766,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
             NSString *fileName = taskDict[KEY_FILE_NAME];
             NSString *headers = taskDict[KEY_HEADERS];
 
-            NSURLSessionDownloadTask *newTask = [self downloadTaskWithURL:[NSURL URLWithString:urlString] fileName:fileName andSavedDir:savedDir andHeaders:headers];
+            NSURLSessionDownloadTask *newTask = [self downloadTaskWithURL:[NSURL URLWithString:urlString] fileName:fileName andSavedDir:savedDir andHeaders:headers pTaskId:taskId];
             NSString *newTaskId = [self identifierForTask:newTask];
 
             // update memory-cache
@@ -826,11 +837,11 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
                 };
             }];
         }
-        
+
         [self executeInDatabaseQueueForTask:^{
             [weakSelf deleteTask:taskId];
         }];
-        
+
         if (shouldDeleteContent) {
             NSURL *destinationURL = [self fileUrlFromDict:taskDict];
 
@@ -914,7 +925,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
         int progress = round(totalBytesWritten * 100 / (double)totalBytesExpectedToWrite);
         NSNumber *lastProgress = _runningTaskById[taskId][KEY_PROGRESS];
         if (([lastProgress intValue] == 0 || (progress > ([lastProgress intValue] + _step)) || progress == 100) && progress != [lastProgress intValue]) {
-            
+
             NSNumber *status;
             if (downloadTask.state == NSURLSessionTaskStateRunning) {
                 status = @(STATUS_RUNNING);
@@ -922,7 +933,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
                 NSDictionary *taskDict = [self loadTaskWithId:taskId];
                 status = taskDict[@"status"];
             }
-            
+
             [self sendUpdateProgressForTaskId:taskId inStatus:status andProgress:@(progress)];
             __typeof__(self) __weak weakSelf = self;
             [self executeInDatabaseQueueForTask:^{
@@ -935,35 +946,47 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
 
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)downloadTask didFinishDownloadingToURL:(NSURL *)location
 {
-    
+
     NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *) downloadTask.response;
     long httpStatusCode = (long)[httpResponse statusCode];
-    
+
     if (debug) {
         NSLog(@"%s HTTP status code: %ld", __FUNCTION__, httpStatusCode);
     }
-    
+
     bool isSuccess = (httpStatusCode >= 200 && httpStatusCode < 300);
-    
+    __typeof__(self) __weak weakSelf = self;
     if (isSuccess) {
         NSString *taskId = [self identifierForTask:downloadTask ofSession:session];
         NSDictionary *task = [self loadTaskWithId:taskId];
+        if (debug) {
+          NSLog(@"Task: %@", task);
+          }
+          if(task == NULL){
+          if (debug) {
+          NSLog(@"Task is failed because the task is null");
+          }
+          [self sendUpdateProgressForTaskId:taskId inStatus:@(STATUS_FAILED) andProgress:@(-1)];
+          [self executeInDatabaseQueueForTask:^{
+          [weakSelf updateTask:taskId status:STATUS_FAILED progress:-1];
+          }];
+          }else{
         NSURL *destinationURL = [self fileUrlOf:taskId taskInfo:task downloadTask:downloadTask];
-        
+
         [_runningTaskById removeObjectForKey:taskId];
-        
+
         NSError *error;
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        
+
         if ([fileManager fileExistsAtPath:[destinationURL path]]) {
             [fileManager removeItemAtURL:destinationURL error:nil];
         }
-        
+
         BOOL success = [fileManager copyItemAtURL:location
                                             toURL:destinationURL
                                             error:&error];
-        
-        __typeof__(self) __weak weakSelf = self;
+
+
         if (success) {
             [self sendUpdateProgressForTaskId:taskId inStatus:@(STATUS_COMPLETE) andProgress:@100];
             [self executeInDatabaseQueueForTask:^{
@@ -978,6 +1001,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
                 [weakSelf updateTask:taskId status:STATUS_FAILED progress:-1];
             }];
         }
+    }
     }
     
 }
